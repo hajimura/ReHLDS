@@ -258,6 +258,79 @@ cvar_t sv_usercmd_custom_random_seed = { "sv_usercmd_custom_random_seed", "0", 0
 cvar_t sv_rehlds_allow_large_sprays = { "sv_rehlds_allow_large_sprays", "1", 0, 1.0f, nullptr };
 #endif
 
+////////////////////////////////////
+struct sv_client_leaf_cache_t
+{
+	uint32 serial;
+	int leafnum;
+	vec3_t origin;
+};
+
+static sv_client_leaf_cache_t g_svClientLeafCache[MAX_CLIENTS];
+static uint32 g_svLeafCacheSerial = 1;
+
+static inline void SV_BeginFrameVisCache()
+{
+	++g_svLeafCacheSerial;
+
+	if (g_svLeafCacheSerial == 0)
+	{
+		g_svLeafCacheSerial = 1;
+	}
+}
+
+static inline bool SV_OriginEqual3(const vec_t *a, const vec_t *b)
+{
+	return (a[0] == b[0]) && (a[1] == b[1]) && (a[2] == b[2]);
+}
+
+static inline int SV_GetClientOriginLeafnumCached(client_t *client)
+{
+	const int idx = int(client - g_psvs.clients);
+	sv_client_leaf_cache_t &c = g_svClientLeafCache[idx];
+	const vec_t *org = client->edict->v.origin;
+
+	if (c.serial == g_svLeafCacheSerial && SV_OriginEqual3(c.origin, org))
+		return c.leafnum;
+
+	c.serial = g_svLeafCacheSerial;
+
+	c.origin[0] = org[0];
+	c.origin[1] = org[1];
+	c.origin[2] = org[2];
+
+	c.leafnum = SV_PointLeafnum((vec_t *)org);
+	return c.leafnum;
+}
+
+static inline bool SV_BuildMulticastMask(int leafnum, int to, unsigned char **outMask)
+{
+	const int destination = to & ~(MSG_FL_ONE);
+
+	if (destination == MSG_FL_BROADCAST)
+	{
+		*outMask = nullptr;
+		return true;
+	}
+
+	if (destination == MSG_FL_PVS)
+	{
+		*outMask = CM_LeafPVS(leafnum);
+		return true;
+	}
+
+	if (destination == MSG_FL_PAS)
+	{
+		*outMask = CM_LeafPAS(leafnum);
+		return true;
+	}
+
+	Con_Printf("MULTICAST: Error %d!\n", to);
+	*outMask = nullptr;
+	return false;
+}
+////////////////////////////////////
+
 delta_t *SV_LookupDelta(char *name)
 {
 	delta_info_t *p = g_sv_delta;
@@ -882,55 +955,37 @@ void SV_AddSampleToHashedLookupTable(const char *pszSample, int iSampleIndex)
 	g_psv.sound_precache_hashedlookup[index] = iSampleIndex;
 }
 
-qboolean SV_ValidClientMulticast(client_t *client, int soundLeaf, int to)
+bool SV_ValidClientMulticast(client_t *client, int to, bool okMask, unsigned char *mask)
 {
 	if (Host_IsSinglePlayerGame() || client->proxy)
-	{
-		return TRUE;
-	}
+		return true;
 
-	int destination = to & ~(MSG_FL_ONE);
+	const int destination = to & ~(MSG_FL_ONE);
+
 	if (destination == MSG_FL_BROADCAST)
-	{
-		return TRUE;
-	}
+		return true;
 
-	unsigned char* mask;
-	if (destination == MSG_FL_PVS)
-	{
-		mask = CM_LeafPVS(soundLeaf);
-	}
-	else
-	{
-		if (destination == MSG_FL_PAS)
-		{
-			mask = CM_LeafPAS(soundLeaf);
-		}
-		else
-		{
-			Con_Printf("MULTICAST: Error %d!\n", to);
-			return FALSE;
-		}
-	}
+	if (!okMask)
+		return false;
 
 	if (!mask)
-	{
-		return TRUE;
-	}
+		return true;
 
-	int bitNumber = SV_PointLeafnum(client->edict->v.origin);
-	if (mask[(bitNumber - 1) >> 3] & (1 << ((bitNumber - 1) & 7)))
-	{
-		return TRUE;
-	}
+	const int bitNumber = SV_GetClientOriginLeafnumCached(client);
 
-	return FALSE;
+	if (bitNumber <= 0)
+		return true;
+
+	return (mask[(bitNumber - 1) >> 3] & (1 << ((bitNumber - 1) & 7))) != 0;
 }
 
 void SV_Multicast(edict_t *ent, vec_t *origin, int to, qboolean reliable)
 {
 	client_t *save = host_client;
-	int leafnum = SV_PointLeafnum(origin);
+	const int leafnum = SV_PointLeafnum(origin);
+	unsigned char *mask = nullptr;
+	const bool okMask = SV_BuildMulticastMask(leafnum, to, &mask);
+
 	if (ent && !(host_client && host_client->edict == ent))
 	{
 		for (int i = 0; i < g_psvs.maxclients; i++)
@@ -943,9 +998,12 @@ void SV_Multicast(edict_t *ent, vec_t *origin, int to, qboolean reliable)
 		}
 	}
 
+	client_t *client;
+
 	for (int i = 0; i < g_psvs.maxclients; i++)
 	{
-		client_t *client = &g_psvs.clients[i];
+		client = &g_psvs.clients[i];
+
 		if (!client->active)
 			continue;
 
@@ -966,18 +1024,18 @@ void SV_Multicast(edict_t *ent, vec_t *origin, int to, qboolean reliable)
 			}
 		}
 
-		if (SV_ValidClientMulticast(client, leafnum, to))
+		if (SV_ValidClientMulticast(client, to, okMask, mask))
 		{
-			sizebuf_t *pBuffer = &client->netchan.message;
-			if (!reliable)
-				pBuffer = &client->datagram;
+			sizebuf_t *pBuffer = reliable ? &client->netchan.message : &client->datagram;
 
 #ifdef REHLDS_FIXES
-			if (pBuffer->cursize + g_psv.multicast.cursize <= pBuffer->maxsize)	// TODO: Should it be <= ? I think so.
-#else // REHLDS_FIXES
+			if (pBuffer->cursize + g_psv.multicast.cursize <= pBuffer->maxsize)
+#else
 			if (pBuffer->cursize + g_psv.multicast.cursize < pBuffer->maxsize)
-#endif // REHLDS_FIXES
+#endif
+			{
 				SZ_Write(pBuffer, g_psv.multicast.data, g_psv.multicast.cursize);
+			}
 		}
 		else
 		{
@@ -8090,6 +8148,8 @@ void EXT_FUNC SV_Frame_Internal()
 	if (!g_psv.active)
 		return;
 
+	SV_BeginFrameVisCache();
+	
 	gGlobalVariables.frametime = host_frametime;
 	g_psv.oldtime = g_psv.time;
 	SV_CheckCmdTimes();
@@ -8595,3 +8655,4 @@ NOXREF qboolean BIsValveGame(void)
 	}
 	return FALSE;
 }
+
