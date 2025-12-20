@@ -643,8 +643,10 @@ bool EXT_FUNC SV_EmitSound2_internal(edict_t *entity, IGameClient *pReceiver, in
 
 	if (bSendPAS && receiver->edict != entity) // if the sound for myself, then do not check PAS.
 	{
-		int leafnum = SV_PointLeafnum(origin);
-		if (!SV_ValidClientMulticast(receiver, leafnum, MSG_FL_PAS))
+		const int leafnum = SV_PointLeafnum(origin);
+		unsigned char *mask = CM_LeafPAS(leafnum);
+
+		if (!SV_ValidClientMulticast(receiver, MSG_FL_PAS, true, mask))
 			return false;
 
 		pBuffer = &receiver->datagram;
@@ -957,3 +959,4 @@ IRehldsFlightRecorder* EXT_FUNC CRehldsApi::GetFlightRecorder() {
 }
 
 EXPOSE_SINGLE_INTERFACE(CRehldsApi, IRehldsApi, VREHLDS_HLDS_API_VERSION);
+
