@@ -1180,19 +1180,12 @@ void EV_PlayReliableEvent_internal(client_t *cl, int entindex, unsigned short ev
 
 void EXT_FUNC EV_Playback(int flags, const edict_t *pInvoker, unsigned short eventindex, float delay, float *origin, float *angles, float fparam1, float fparam2, int iparam1, int iparam2, int bparam1, int bparam2)
 {
-	client_t *cl;
-	signed int j;
-	event_args_t eargs;
-	vec3_t event_origin;
-	int invoker;
-	int slot;
-	int leafnum;
-
 	if (flags & FEV_CLIENT)
 		return;
 
-	invoker = -1;
+	event_args_t eargs;
 	Q_memset(&eargs, 0, sizeof(eargs));
+
 	if (!VectorCompare(origin, vec3_origin))
 	{
 		eargs.origin[2] = origin[2];
@@ -1200,6 +1193,7 @@ void EXT_FUNC EV_Playback(int flags, const edict_t *pInvoker, unsigned short eve
 		eargs.origin[1] = origin[1];
 		eargs.flags |= FEVENT_ORIGIN;
 	}
+
 	if (!VectorCompare(angles, vec3_origin))
 	{
 		eargs.angles[2] = angles[2];
@@ -1207,6 +1201,7 @@ void EXT_FUNC EV_Playback(int flags, const edict_t *pInvoker, unsigned short eve
 		eargs.angles[1] = angles[1];
 		eargs.flags |= FEVENT_ANGLES;
 	}
+
 	eargs.fparam1 = fparam1;
 	eargs.fparam2 = fparam2;
 	eargs.iparam1 = iparam1;
@@ -1226,26 +1221,35 @@ void EXT_FUNC EV_Playback(int flags, const edict_t *pInvoker, unsigned short eve
 		return;
 	}
 
+	vec3_t event_origin;
+	int invoker = -1;
+
 	if (pInvoker)
 	{
 		event_origin[0] = pInvoker->v.origin[0];
 		event_origin[1] = pInvoker->v.origin[1];
 		event_origin[2] = pInvoker->v.origin[2];
+
 		invoker = NUM_FOR_EDICT(pInvoker);
+
 		if (invoker >= 1)
 		{
 			if (invoker <= g_psvs.maxclients)
 			{
 				if (pInvoker->v.flags & FL_DUCKING)
+				{
 					eargs.ducking = 1;
+				}
 			}
 		}
+
 		if (!(eargs.flags & FEVENT_ORIGIN))
 		{
 			eargs.origin[0] = pInvoker->v.origin[0];
 			eargs.origin[1] = pInvoker->v.origin[1];
 			eargs.origin[2] = pInvoker->v.origin[2];
 		}
+
 		if (!(eargs.flags & FEVENT_ANGLES))
 		{
 			eargs.angles[0] = pInvoker->v.angles[0];
@@ -1260,11 +1264,13 @@ void EXT_FUNC EV_Playback(int flags, const edict_t *pInvoker, unsigned short eve
 		event_origin[2] = eargs.origin[2];
 	}
 
-	leafnum = SV_PointLeafnum(event_origin);
+	const int leafnum = SV_PointLeafnum(event_origin);
+	client_t *cl;
 
-	for (slot = 0; slot < g_psvs.maxclients; slot++)
+	for (int slot = 0; slot < g_psvs.maxclients; slot++)
 	{
 		cl = &g_psvs.clients[slot];
+
 		if (!cl->active || !cl->spawned || !cl->connected || !cl->fully_connected || cl->fakeclient)
 			continue;
 
@@ -1290,7 +1296,9 @@ void EXT_FUNC EV_Playback(int flags, const edict_t *pInvoker, unsigned short eve
 
 		if (pInvoker && !(flags & FEV_GLOBAL))
 		{
-			if (!SV_ValidClientMulticast(cl, leafnum, 4))
+			unsigned char *mask = CM_LeafPAS(leafnum);
+
+			if (!SV_ValidClientMulticast(cl, MSG_FL_PAS, true, mask))
 				continue;
 		}
 
@@ -1306,23 +1314,32 @@ void EXT_FUNC EV_Playback(int flags, const edict_t *pInvoker, unsigned short eve
 			continue;
 		}
 
+		signed int j;
+
 		if (flags & FEV_UPDATE)
 		{
+
 			for (j = 0; j < MAX_EVENT_QUEUE; j++)
 			{
-				event_info_s *ei = &cl->events.ei[j];
+				event_info_t *ei = &cl->events.ei[j];
+
 				if (ei->index == eventindex && invoker != -1 && ei->entity_index == invoker)
 					break;
 			}
 
 			if (j < MAX_EVENT_QUEUE)
 			{
-				event_info_s *ei = &cl->events.ei[j];
+				event_info_t *ei = &cl->events.ei[j];
+
 				ei->entity_index = -1;
 				ei->index = eventindex;
 				ei->packet_index = -1;
+
 				if (pInvoker)
+				{
 					ei->entity_index = invoker;
+				}
+
 				Q_memcpy(&ei->args, &eargs, sizeof(ei->args));
 				ei->fire_time = delay;
 				continue;
@@ -1331,25 +1348,30 @@ void EXT_FUNC EV_Playback(int flags, const edict_t *pInvoker, unsigned short eve
 
 		for (j = 0; j < MAX_EVENT_QUEUE; j++)
 		{
-			event_info_s *ei = &cl->events.ei[j];
+			event_info_t *ei = &cl->events.ei[j];
+
 			if (ei->index == 0)
 				break;
 		}
 
 		if (j < MAX_EVENT_QUEUE)
 		{
-			event_info_s *ei = &cl->events.ei[j];
+			event_info_t *ei = &cl->events.ei[j];
+
 			ei->entity_index = -1;
 			ei->index = eventindex;
 			ei->packet_index = -1;
+
 			if (pInvoker)
+			{
 				ei->entity_index = invoker;
+			}
+
 			Q_memcpy(&ei->args, &eargs, sizeof(ei->args));
 			ei->fire_time = delay;
 		}
 	}
 }
-
 void EXT_FUNC EV_SV_Playback(int flags, int clientindex, unsigned short eventindex, float delay, float *origin, float *angles, float fparam1, float fparam2, int iparam1, int iparam2, int bparam1, int bparam2)
 {
 	if (flags & FEV_CLIENT)
@@ -2869,3 +2891,4 @@ int EXT_FUNC EngCheckParm(const char *pchCmdLineToken, char **pchNextVal)
 {
 	return hudCheckParm((char*)pchCmdLineToken, pchNextVal);
 }
+
