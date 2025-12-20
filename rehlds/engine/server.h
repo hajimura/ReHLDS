@@ -455,7 +455,7 @@ int SV_HashString(const char *string, int iBounds);
 int SV_LookupSoundIndex(const char *sample);
 void SV_BuildHashedSoundLookupTable(void);
 void SV_AddSampleToHashedLookupTable(const char *pszSample, int iSampleIndex);
-qboolean SV_ValidClientMulticast(client_t *client, int soundLeaf, int to);
+bool SV_ValidClientMulticast(client_t *client, int to, bool okMask, unsigned char *mask)
 void SV_Multicast(edict_t *ent, vec_t *origin, int to, qboolean reliable);
 void SV_WriteMovevarsToClient(sizebuf_t *message, struct movevars_s *movevars);
 void SV_WriteDeltaDescriptionsToClient(sizebuf_t *msg);
@@ -624,3 +624,4 @@ char *SV_GetClientIDString(client_t *client);
 int GetGameAppID(void);
 qboolean IsGameSubscribed(const char *gameName);
 NOXREF qboolean BIsValveGame(void);
+
